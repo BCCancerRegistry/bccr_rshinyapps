@@ -93,11 +93,25 @@ server <- function(input, output) {
   report0 <- reactive({
     req(reportability())
     
-    reportability() %>%
-      mutate(final_label = factor(combined_label, levels = c(0, 1), labels = c("Non-Reportable", "Reportable"))) %>%
-      group_by(month = floor_date(fulldate, unit = "month"), final_label) %>% 
-      summarise(volume = sum(n())) %>%
-      ungroup()
+    factored <- reportability() %>%
+      mutate(final_label = factor(combined_label, levels = c(0, 1), labels = c("Non-Reportable", "Reportable")),
+             month = floor_date(fulldate, unit = "month")
+      )
+      
+    byReportable <- factored %>%
+      group_by(month, final_label) %>% 
+      summarise(volume = sum(n()), .groups = "drop")
+    
+    byTotal <- factored %>%
+      group_by(month) %>% 
+      summarise(volume = sum(n()), .groups = "drop") %>%
+      mutate(final_label = "Combined")
+    
+    byAll <- byReportable %>%
+      bind_rows(byTotal) %>%
+      arrange(month, desc(final_label)) 
+    
+    return(byAll)
   })
   
   # Sum of non/reportable by day plus totals, as columns
@@ -120,22 +134,61 @@ server <- function(input, output) {
   report2 <- reactive({
     req(reportability())
     
-    reportability() %>%
-      mutate(final_label = factor(combined_label, levels = c(0, 1), labels = c("Non-Reportable", "Reportable"))) %>%
-      group_by(fulldate, final_label) %>%
-      summarise(volume = sum(n()))
+    factored <- reportability() %>%
+      mutate(final_label = factor(combined_label, levels = c(0, 1), labels = c("Non-Reportable", "Reportable"))
+      )
+    
+    byReportable <- factored %>%
+      group_by(fulldate, final_label) %>% 
+      summarise(volume = sum(n()), .groups = "drop")
+    
+    byTotal <- factored %>%
+      group_by(fulldate) %>% 
+      summarise(volume = sum(n()), .groups = "drop") %>%
+      mutate(final_label = "Combined")
+    
+    byAll <- byReportable %>%
+      bind_rows(byTotal) %>%
+      arrange(fulldate, desc(final_label)) 
+    
+    return(byAll)
+    
+    # reportability() %>%
+    #   mutate(final_label = factor(combined_label, levels = c(0, 1), labels = c("Non-Reportable", "Reportable"))) %>%
+    #   group_by(fulldate, final_label) %>%
+    #   summarise(volume = sum(n()))
   })
   
   # Summarizing the counts for health authorities
   totalHA <- reactive({
-    reportraw %>%
+    req(input$HAtableGroup)
+  
+    reportdata <- reportraw %>%
       filter(fulldate >= date1() & fulldate <= date2()) %>%
-      group_by(HA) %>%
-      summarise(total_volume = sum(n()),
-                "Percentage of Total" = percent(total_volume/nrow(reportraw), accuracy = 0.1)
-                ) %>%
-      arrange(desc(total_volume)) %>%
-      ungroup()
+      mutate(combined_label = factor(combined_label, levels = c(0, 1), labels = c("Non-Reportable", "Reportable")))
+    
+    if (input$HAtableGroup == "Reportability") {
+      tableData <- reportdata %>%
+        group_by(HA, combined_label) %>%
+        summarise(total_volume = sum(n()),
+                  .groups = "drop"
+        ) %>%
+        group_by(HA) %>%
+        mutate("Percentage of Health Authority Total" = percent(total_volume/sum(total_volume), accuracy = 0.1)) %>%
+        ungroup() %>%
+        mutate("Percentage of Total" = percent(total_volume/sum(total_volume), accuracy = 0.1)) %>%
+        ungroup() %>%
+        arrange(HA) %>%
+        rename("Reportability" = combined_label)
+    } else {
+      tableData <- reportdata %>%
+        group_by(HA) %>%
+        summarise(total_volume = sum(n()),
+                  .groups = "drop"
+        ) %>%
+        mutate("Percentage of Total" = percent(total_volume/sum(total_volume), accuracy = 0.1))
+    }
+      
   })
   
   # Sum of non/reportable grouped by day and HA
@@ -201,11 +254,13 @@ server <- function(input, output) {
   # Regression Dataset, Reportable:NonReportable Ratios grouped by Month
   regress0 <- reactive({
     req(date1(), date2())
-    report0() %>%
+    regressData <- report0() %>%
       filter(month >= date1() & month <= date2()) %>%
       pivot_wider(names_from = final_label, values_from = volume) %>%
-      mutate("Ratio" = (.[[3]] / .[[2]])) %>%
-      rename(NonReportable = 2)
+      mutate("Ratio" = (.[[2]] / .[[3]])) %>%
+      rename(NonReportable = 3)
+    
+    print(regressData)
   })
   
   # Tier 1 Input
@@ -231,10 +286,11 @@ server <- function(input, output) {
       )
     } else if (input$tabs == "Predictive Analysis") {
       req(regress0())
-      varSelectInput("predictvar",
-                     "Select variable: ",
-                     data = regress0()[2:4],
-                     selected = "Ratio"
+      pickerInput("predictvar",
+                  "Select variable: ",
+                  choices = c("Reportable", "NonReportable", "Ratio", "Combined"),
+                  selected = "Ratio",
+                  multiple = FALSE
       )
     } else {
       return(NULL)
@@ -323,12 +379,18 @@ server <- function(input, output) {
   # Non/reportability plots
   output$plot2 <- renderPlotly({
     req(input$series1, nMonths())
+    
+    plotly2data <- report0
     if (input$series1 == "Reportability") {
       plotly2 <- report0() %>%
         filter(month >= date1() & month <= date2()) %>%
         group_by(month) %>%
         mutate(month_total = sum(volume),
-               percentage = percent((volume/month_total), accuracy = .1)) %>%
+               percentage = ifelse(final_label != "Combined",
+                                   percent((volume/month_total)*2, accuracy = .1),
+                                   percent(1, accuracy = .1)
+               )
+        ) %>%
         ggplot(mapping = aes(x = month, y = volume, color = final_label, label = percentage)) +
         geom_line() +
         scale_x_date(date_breaks = nMonths(), date_labels = "%b %Y") +
@@ -490,7 +552,7 @@ server <- function(input, output) {
       geom_point(data = regress0(), aes(x = month, y = !!sym(input$predictvar)), colour = "red") +
       scale_x_date(date_breaks = nMonths(), date_labels = "%b %Y") +
       labs(title = paste(toString(input$predictvar), 
-                         "~ Month \n(Ratio = Reportable/Non-Reportable)"),
+                         "~ Month"),
            x = "Date",
            y = toString(input$predictvar),
            colour = "Series") +
@@ -534,7 +596,7 @@ server <- function(input, output) {
       NULL
     }
     
-    ggplotly(plotly5, height = 600)
+    ggplotly(plotly5, height = 550)
   })
   
   # Regression line output summary
@@ -570,7 +632,7 @@ server <- function(input, output) {
     datatable(
       totalHA1,
       options = list(
-        pageLength = 6
+        pageLength = 20
       )
     )
   })
