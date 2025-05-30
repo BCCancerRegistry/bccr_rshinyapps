@@ -1,5 +1,19 @@
 ##### CAN-REP Global File
 
+# Libraries
+library(tidyverse)
+library(ggflowchart)
+library(scales)
+library(shinydashboard)
+library(hrbrthemes)
+library(DT)
+library(plotly)
+library(shinyWidgets)
+library(ggpubr)
+library(DBI)
+library(odbc)
+
+# Connections
 con <- dbConnect(odbc::odbc(),
                  Driver = "SQL Server",
                  Server = "spdbsmarc001",
@@ -16,20 +30,6 @@ query <- "SELECT [msgid]
 BCCRVW <- dbGetQuery(con, query) 
 
 # BCCRVW <- read.csv("H:/Data Integrity Analyst/Data Science/dashboard data/volumes/bccr_vw_can_rep.csv", header=FALSE)
-
-# Libraries & Data Wrangling
-#####
-library(tidyverse)
-library(ggflowchart)
-library(scales)
-library(shinydashboard)
-library(hrbrthemes)
-library(DT)
-library(plotly)
-library(shinyWidgets)
-library(ggpubr)
-library(DBI)
-library(odbc)
 
 ###### Data Wrangling 
 #####################
