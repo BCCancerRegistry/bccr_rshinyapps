@@ -26,7 +26,7 @@ ui <- dashboardPage(skin = "black",
                                      separator = " to "
                       ),
                       pickerInput("authority",
-                                  "Select the health authorities:",
+                                  "Select health authorities:",
                                   choices = unique(diagraw$HA),
                                   options = list('actions-box' = TRUE),
                                   multiple = TRUE,
@@ -45,13 +45,13 @@ ui <- dashboardPage(skin = "black",
                             body, h1, h2, h3, h4, h5, h6 {
                               font-family: 'Arial Narrow', sans-serif;
                             }
-                            .skin-blue .main-header .logo {
+                            .skin-red .main-header .logo {
                               font-family: 'Arial Narrow', sans-serif;
                             }
-                            .skin-blue .main-header .navbar {
+                            .skin-red .main-header .navbar {
                               font-family: 'Arial Narrow', sans-serif; 
                             }
-                            .skin-blue .main-sidebar {
+                            .skin-red .main-sidebar {
                               font-family: 'Arial Narrow', sans-serif;
                             }
                             .content-wrapper, .right-side {
@@ -63,11 +63,17 @@ ui <- dashboardPage(skin = "black",
                                     font-size: 12px;
                             } .white-box {
                               background-color: white;
-                              padding: 15px;
+                              padding: 10px;
+                              border-radius: 5px;
+                              width: 100%;
+                              display: flex;
+                              flex-wrap: wrap;
+                              border-radius: 0px; 
+                              justify-content: space-between;
                             } .custom-title {
                               font-size: 24px;
                               font-weight: bold;
-                            }
+                            } 
                         "))
                       ),
                       tabsetPanel(
@@ -82,8 +88,20 @@ ui <- dashboardPage(skin = "black",
                                    ),
                                    column(12,
                                           div(class = "white-box",
-                                              h3(tags$b("Health Authority Summary")),
-                                              DTOutput("table1")
+                                              box(
+                                                fluidRow(
+                                                  column(2,
+                                                         pickerInput(
+                                                           "HAtableGroup",
+                                                           label = "Group health authority totals by:",
+                                                           choices = c("Health authority only", "Reportability")
+                                                         )
+                                                  )
+                                                ),
+                                                title = "Summary Table",
+                                                DTOutput("table1"),
+                                                width = 12
+                                              )
                                               )
                                           )
                                  )
@@ -159,14 +177,25 @@ ui <- dashboardPage(skin = "black",
                                    column(12,
                                           div(class = "white-box",
                                               plotlyOutput("plot5"),
-                                              style = "height:650px")
+                                              style = "height:550px")
                                    )
                                  ),
                                  fluidRow(
                                    column(12,
                                           div(class = "white-box",
-                                              h3(tags$b("Model Summary Output")),
-                                              verbatimTextOutput("regressionline"))
+                                              paste("Note: Ratio is calculated as [Reportable Volume]/[Non-Reportable Volume]")
+                                              )
+                                          )
+                                 ),
+                                 fluidRow(
+                                   column(12,
+                                          div(class = "white-box",
+                                              box(
+                                                title = "Model Summary Output",
+                                                verbatimTextOutput("regressionline"),
+                                                width = 12
+                                              )
+                                          )
                                    )
                                  )
                         ),
