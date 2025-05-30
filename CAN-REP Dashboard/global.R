@@ -1,6 +1,21 @@
 ##### CAN-REP Global File
 
-BCCRVW <- read.csv("H:/Data Integrity Analyst/Data Science/dashboard data/volumes/bccr_vw_can_rep.csv", header=FALSE)
+con <- dbConnect(odbc::odbc(),
+                 Driver = "SQL Server",
+                 Server = "spdbsmarc001",
+                 Database = "eMaRCPlus_v60Patch",
+                 Trusted_Connection = "Yes")
+
+query <- "SELECT [msgid]
+              ,[msg_dt]
+              ,[ha]
+              ,[reportability_filter]
+              ,[final_label]
+          FROM [eMaRCPLus_v60Patch].[dbo].[bccr_vw_can_rep]"
+
+BCCRVW <- dbGetQuery(con, query) 
+
+# BCCRVW <- read.csv("H:/Data Integrity Analyst/Data Science/dashboard data/volumes/bccr_vw_can_rep.csv", header=FALSE)
 
 # Libraries & Data Wrangling
 #####
@@ -13,21 +28,27 @@ library(DT)
 library(plotly)
 library(shinyWidgets)
 library(ggpubr)
+library(DBI)
+library(odbc)
 
 ###### Data Wrangling 
 #####################
 
 BCCRVW <- BCCRVW %>%
-  select(1:6)
-colnames(BCCRVW) <- c("msgid", "fulldate", "HA", "XHA", "combined_label", "final_label")
-BCCRVW$fulldate <- ymd(BCCRVW$fulldate)
+  mutate(final_label = ifelse(is.na(final_label), "Unknown", final_label),
+         msg_dt = ymd(msg_dt),
+         ha = case_when(ha == "FH" ~ "FHA", TRUE ~ ha)) %>%
+  rename(fulldate = msg_dt,
+         HA = ha,
+         combined_label = reportability_filter)
+# colnames(BCCRVW) <- c("msgid", "fulldate", "HA", "XHA", "combined_label", "final_label")
 
 reportraw <- BCCRVW %>%
-  select(1:2, 5, 3)  
+  select(1:2, 4, 3)  
 
 diagraw <- BCCRVW %>%
-  select(1:2, 6, 3) %>%
-  filter(final_label != "" & !is.na(final_label))
+  select(1:2, 5, 3) 
+  # filter(final_label != "" & !is.na(final_label))
 
 #####################
 
