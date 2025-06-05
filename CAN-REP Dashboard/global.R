@@ -1,6 +1,7 @@
 ##### CAN-REP Global File
 
-# Libraries
+# Libraries & Data Wrangling
+#####
 library(tidyverse)
 library(ggflowchart)
 library(scales)
@@ -13,7 +14,10 @@ library(ggpubr)
 library(DBI)
 library(odbc)
 
-# Connections
+
+# Connections to the server -----------------------------------------------
+
+# for the overall view
 con <- dbConnect(odbc::odbc(),
                  Driver = "SQL Server",
                  Server = "spdbsmarc001",
@@ -27,28 +31,50 @@ query <- "SELECT [msgid]
               ,[final_label]
           FROM [eMaRCPLus_v60Patch].[dbo].[bccr_vw_can_rep]"
 
-BCCRVW <- dbGetQuery(con, query) 
+# CAN-REP View
+BCCRVW <- dbGetQuery(con, query)
 
-# BCCRVW <- read.csv("H:/Data Integrity Analyst/Data Science/dashboard data/volumes/bccr_vw_can_rep.csv", header=FALSE)
 
-###### Data Wrangling 
-#####################
+# For filling in DX Groups - where final_label is missing (after mid-2024)
+dxGroupQuery <- "SELECT [msgid]
+                    ,[final_label]
+                FROM [eMaRCPLus_v60Patch].[BCCR].[bccr_dx_pipeline_new]"
+
+dxGroupQuery2 <- "SELECT [msg_id]
+                    ,[dx_group]
+                  FROM [eMaRCPLus_v60Patch].[BCCR].[dx_group_pipeline]"
+
+dxData1 <- dbGetQuery(con, dxGroupQuery) %>%
+  rename(finalLabel = final_label)
+dxData2 <- dbGetQuery(con, dxGroupQuery2) %>%
+  rename(msgid = msg_id,
+         finalLabel = dx_group)
+dxData <- rbind(dxData1, dxData2)
+
+# Formatting datasets for analysis ----------------------------------------
 
 BCCRVW <- BCCRVW %>%
-  mutate(final_label = ifelse(is.na(final_label), "Unknown", final_label),
-         msg_dt = ymd(msg_dt),
-         ha = case_when(ha == "FH" ~ "FHA", TRUE ~ ha)) %>%
+  left_join(dxData, by = "msgid") %>%
+  mutate(final_label = ifelse(is.na(final_label), finalLabel, final_label)) %>%
+  mutate(msg_dt = ymd(msg_dt),
+         ha = case_when(ha == "FH" ~ "FHA", TRUE ~ ha)
+         ) %>%
   rename(fulldate = msg_dt,
          HA = ha,
          combined_label = reportability_filter)
-# colnames(BCCRVW) <- c("msgid", "fulldate", "HA", "XHA", "combined_label", "final_label")
+  # select(-6)
 
+# Separating reportability data and diagnostic data
+
+# reportability data
 reportraw <- BCCRVW %>%
   select(1:2, 4, 3)  
 
+# final_label / dx group data (reportables only)
 diagraw <- BCCRVW %>%
-  select(1:2, 5, 3) 
-  # filter(final_label != "" & !is.na(final_label))
+  filter(combined_label == 1) %>%
+  select(1:2, 5, 3)
+  
 
 #####################
 
@@ -188,18 +214,24 @@ getOutliers <- function(date1, date2, data, group_col) {
     summarise(volume = sum(volume)) %>%
     ungroup() %>%
     group_by({{group_col}}) %>%
-    mutate(low = ceiling(quantile(volume, 0.25) - (1.5 * IQR(volume))),
+    mutate(low = ceiling(quantile(volume, 0.10)),
            high = ceiling(quantile(volume, 0.75) + (1.5 * IQR(volume))),
            "Median" = quantile(volume, 0.5),
-           outlier = ifelse((volume < low | volume > high), "Yes", "No"),
+           outlier = case_when(volume > high ~ "High",
+                               volume < low ~ "Low",
+                               TRUE ~ "No"),
            "Outlier Bounds" = str_c("(", low, ", ", high, ")"),
            "Month" = format(month, "%B %Y")
     ) %>%
     ungroup() %>%
-    filter(outlier == "Yes") %>%
+    filter(outlier != "No") %>%
+    mutate("Proportion Above/Below Threshold" = case_when(outlier == "High" ~ round((volume - high)/high, 3),
+                                                          outlier == "Low" ~ round((volume - low)/low, 3),
+                                                          TRUE ~ NA)
+    ) %>%
     arrange(desc(month))
   outliers <- outliers %>%
     rename("Volume" = 3) %>%
-    select(1, 9, 8, 3)
+    select(1, 9, 8, 3, 10)
   return(outliers)
 }
