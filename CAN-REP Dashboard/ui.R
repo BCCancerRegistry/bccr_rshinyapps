@@ -127,7 +127,7 @@ ui <- dashboardPage(skin = "black",
                                           div(class = "white-box",
                                               h3(tags$b(textOutput("numOutliers2"))),
                                               DTOutput("table2a"),
-                                              paste0("Lower threshold is Q1 for a given category,
+                                              paste0("Lower threshold is 10th percentile for a given category,
                                                      upper threshold is Q3 + 1.5*IQR for a given category")
                                           )
                                    )
@@ -154,7 +154,7 @@ ui <- dashboardPage(skin = "black",
                                           div(class = "white-box",
                                               h3(tags$b(textOutput("numOutliers3"))),
                                               DTOutput("table3a"),
-                                              paste0("Lower threshold is Q1 for a given category,
+                                              paste0("Lower threshold is 10th percentile for a given category,
                                                      upper threshold is Q3 + 1.5*IQR for a given category")
                                           )
                                    )
