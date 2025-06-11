@@ -1,0 +1,14 @@
+# Libraries
+
+library(tidyverse)
+library(scales)
+library(shinydashboard)
+library(hrbrthemes)
+library(DT)
+library(plotly)
+library(shinyWidgets)
+library(DBI)
+library(odbc)
+library(stringr)
+library(stringi)
+library(ggflowchart)
