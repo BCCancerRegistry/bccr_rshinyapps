@@ -34,8 +34,8 @@ server <- function(input, output, session) {
   
   # Global Date Switch 
   output$globalDateSwitch <- renderUI({
-    
-    req(input$XdateMetric)
+  
+    # req(input$XdateMetric)
     
     startDate <- ifelse(input$XdateMetric == "Message Date",
                         ymd("2024-10-01"),
