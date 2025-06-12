@@ -397,7 +397,8 @@ server <- function(input, output) {
         labs(title = "Reportability Volumes", x = "Date", y = "Volume", color = "Reportability") +
         theme_ipsum() +
         theme(axis.text.x=element_text(angle = 45, vjust = 0.5))
-      ggplotly(plotly2, height = 650) 
+      ggplotly(plotly2, height = 650) %>%
+        layout(margin = list(t = 50, b = 30))
     } else if (input$series1 == "Health Authority") {
       req(input$series1a)
       plotly2a <- reportability() %>%
@@ -415,7 +416,8 @@ server <- function(input, output) {
         labs(title = str_c(input$series1a, " Volumes"), x = "Date", y = "Volume", color = "Health Authority") +
         theme_ipsum() +
         theme(axis.text.x=element_text(angle = 45, vjust = 0.5))
-      ggplotly(plotly2a, height = 650)
+      ggplotly(plotly2a, height = 650) %>%
+        layout(margin = list(t = 50, b = 30))
     }
   })
   
@@ -439,7 +441,8 @@ server <- function(input, output) {
         scale_x_date(date_breaks = nMonths(), date_labels = "%b %Y") +
         theme_ipsum() +
         theme(axis.text.x=element_text(angle = 45, vjust = 0.5))
-      ggplotly(plotly3, height = 650)
+      ggplotly(plotly3, height = 650) %>%
+        layout(margin = list(t = 50, b = 30))
     } else if (input$series2 == "Health Authority") {
       req(input$series2b)
       plotly3a <- diagnoses() %>%
@@ -462,7 +465,8 @@ server <- function(input, output) {
         scale_x_date(date_breaks = nMonths(), date_labels = "%b %Y") +
         theme_ipsum() +
         theme(axis.text.x=element_text(angle = 45, vjust = 0.5))
-      ggplotly(plotly3a, height = 650)
+      ggplotly(plotly3a, height = 650) %>%
+        layout(margin = list(t = 50, b = 30))
     }
   })
   
@@ -596,7 +600,8 @@ server <- function(input, output) {
       NULL
     }
     
-    ggplotly(plotly5, height = 550)
+    ggplotly(plotly5, height = 550) %>%
+      layout(margin = list(t = 50, b = 30))
   })
   
   # Regression line output summary
