@@ -1,2 +1,2 @@
 # bccr_rshinyapps
-R shiny apps for BCCR
+R Shiny Apps for BCCR
