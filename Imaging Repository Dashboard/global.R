@@ -16,142 +16,111 @@ library(stringi)
 
 options(scipen = 999)
 
+# Global Files ------------------------------------------------------------
 
-# Connections -------------------------------------------------------------
-
+# Getting unique OBS values
 con <- dbConnect(odbc::odbc(),
                  Driver = "SQL Server",
                  Server = "spdbsdima001",
-                 Database = "BCCR_Results",
+                 Database = "BCCR_Imaging_Results",
                  Trusted_Connection = "Yes")
 
-patientQuery <- "SELECT [MessageId]
-                ,[Identifier]
-                ,[LastName]
-                ,[FirstName]
-                ,[MiddleName]
-                ,[BirthDate]
-                ,[Sex]
-                ,[StreetAddress]
-                ,[AddressOtherDesignation]
-                ,[City]
-                ,[StateOrProvince]
-                ,[ZipOrPostalCode]
-                ,[Country]
-              FROM [BCCR_Results].[dbo].[Patient]"
+examTypeStdQuery <- "SELECT DISTINCT [ExamTypeStd] FROM [BCCR_Imaging_Results].[dbo].[Result]"
+authorityQuery <- "SELECT DISTINCT [HealthAuthority] FROM [BCCR_Imaging_Results].[dbo].[Result]"
 
-messageQuery <- "SELECT [MessageId]
-                ,[ChannelName]
-                ,[SendingApplication]
-                ,[SendingFacility]
-                ,[MessageDateTime]
-                ,[MessageControlId]
-                ,[T1StatusCode]
-                ,[T2StatusCode]
-                ,[ErrorCodes]
-            FROM [BCCR_Results].[dbo].[Message]"
+# ExamTypeStd
+distinctExamType <- dbGetQuery(con, examTypeStdQuery) %>%
+  filter(ExamTypeStd != "")
 
-resultQuery <- "SELECT [MessageId]
-          ,[ObservationDateTime]
-          ,[ResultsReportDateTime]
-          ,[ExamDescription]
-          ,[ExamType]
-          ,[ExamTypeStd]
-          ,[ReasonForStudy]
-          FROM [BCCR_Results].[dbo].[Result]"
+# HealthAuthority
+distinctAuthority <- dbGetQuery(con, authorityQuery) %>%
+  filter(HealthAuthority != "")
 
 # Exam description codes -> to Cerner Master Procedure Name
 codes <- read.csv("H:/Data Integrity Analyst/Data Science/dashboard data/imaging exam description codes/examDescriptionCodes.csv") %>%
   select(2, 3)
 
-# Loading datasets, formatting
-
-patientData <- dbGetQuery(con, patientQuery) %>%
-  mutate(BirthDate = ymd(substr(BirthDate, 1, 10)),
-         BirthDate = if_else(BirthDate <= ymd("1901-01-01"), as.Date(NA), BirthDate),
-         Identifier = if_else(Identifier == "", as.character(NA), Identifier),
-         Age = if_else(is.na(BirthDate),
-                       as.numeric(NA),
-                       floor(as.numeric(interval(BirthDate, today())/ years(1)
-                                        )
-                             )
-         ),
-         City = str_to_title(City)
-  )
-
-messageData <- dbGetQuery(con, messageQuery) %>%
-  mutate(MessageDateTime = as.Date(substr(MessageDateTime, 1, 10)),
-         MessageMonth = floor_date(MessageDateTime, unit = "month")
-  )
-
-resultData <- dbGetQuery(con, resultQuery) %>%
-  rename(obsDate = 2) %>%
-  mutate(obsDate = as.Date(substr(obsDate, 1, 10))) %>%
-  rename(rrDate = 3) %>%
-  mutate(rrDate = as.Date(substr(rrDate, 1, 10)))
-
-# summary table function
-getStats <- function(x, y, z, group_col) {
+# Functions ---------------------------------------------------------------
+# Time Series Summary Table Function
+getTimeSummary <- function(dataSet, dateMetric, viewVariable, nameConvention) {
   
-  filt <- z %>%
-    filter(between(date, x, y))
+  allSummary <- dataSet %>%
+    filter(!!sym(viewVariable) != "") %>%
+    group_by(!!sym(dateMetric), !!sym(viewVariable)) %>%
+    summarise(Volume = n(), .groups = 'drop')
   
-  ntotal <- sum(filt$Volume) 
-    
-  dailyval <- filt %>%
-    group_by(across(all_of(group_col)), date) %>%
-    summarise(Volume = sum(Volume), .groups = 'drop') %>%
-    group_by(across(all_of(group_col))) %>%
-    summarise("Daily Mean" = ceiling(mean(Volume)),
-              "Daily Median" = ceiling(quantile(Volume, 0.5)),
-              "Daily Range" = str_c("(", min(Volume), ", ", max(Volume), ")"),
-              "Daily Outlier Bounds" = paste0("(",
-                                               ceiling(quantile(Volume, 0.1)),
-                                               ", ",
-                                               ceiling(quantile(Volume, 0.75) + (1.5 * IQR(Volume))),
-                                               ")"
+  Total <- sum(allSummary$Volume) 
+  
+  summary <- allSummary %>%
+    group_by(!!sym(viewVariable)) %>%
+    summarise("Mean" = ceiling(mean(Volume)),
+              "Median" = ceiling(quantile(Volume, 0.5)),
+              "Range" = str_c("(", min(Volume), ", ", max(Volume), ")"),
+              "Outlier Bounds" = paste0("(",
+                                        ceiling(quantile(Volume, 0.1)),
+                                        ", ",
+                                        ceiling(quantile(Volume, 0.75) + (1.5 * IQR(Volume))),
+                                        ")"
               ),
-              .groups = 'drop')
+              "Total Volume" = paste0(sum(Volume), " (", percent(sum(Volume)/Total, accuracy = 0.01), ")"),
+              .groups = 'drop') %>%
+    rename_with(.cols = 2:5, .fn = ~ paste0(nameConvention, " ", .x)) 
   
-  weeklyval <- filt %>%
-    mutate(week = floor_date(date, unit = "week", week_start = 1)) %>%
-    group_by(across(all_of(group_col)), week) %>%
-    summarise(Volume = sum(Volume), .groups = 'drop') %>%
-    group_by(across(all_of(group_col))) %>%
-    summarise("Weekly Mean" = ceiling(mean(Volume)),
-              "Weekly Median" = ceiling(quantile(Volume, 0.5)),
-              "Weekly Range" = str_c("(", min(Volume), ", ", max(Volume), ")"),
-              "Weekly Outlier Bounds" = paste0("(",
-                                                ceiling(quantile(Volume, 0.1)),
-                                                ", ",
-                                                ceiling(quantile(Volume, 0.75) + (1.5 * IQR(Volume))),
-                                                ")"
-              ),
-              .groups = 'drop')
+  return(summary)
   
-  monthlyval <- filt %>%
-    group_by(across(all_of(group_col)), year(date), month(date)) %>%
-    summarise(Volume = sum(Volume), .groups = 'drop') %>%
-    group_by(across(all_of(group_col))) %>%
-    summarise("Monthly Mean" = ceiling(mean(Volume)),
-              "Monthly Median" = ceiling(quantile(Volume, 0.5)),
-              "Monthly Range" = str_c("(", min(Volume), ", ", max(Volume), ")"),
-              "Monthly Outlier Bounds" = paste0("(",
-                                                ceiling(quantile(Volume, 0.1)),
-                                                ", ",
-                                                ceiling(quantile(Volume, 0.75) + (1.5 * IQR(Volume))),
-                                                ")"
-              ),
-              "Total Volume" = paste0(sum(Volume), " (", percent(sum(Volume)/ntotal, accuracy = 0.01), ")"),
-              .groups = 'drop')
-  
-  
-  
-  summarytable <- dailyval %>%
-    inner_join(weeklyval, by = group_col) %>%
-    inner_join(monthlyval, by = group_col)
-  
-  return(summarytable)
 }
 
-
+# Bar Plot Generation Function
+getBarPlotly <- function(dataset, mainVariable, viewMetric, filterVariable, filterBy) {
+  
+  # Option to add in a secondary filter
+  if (filterVariable != "") {
+    plotDataInitial <- dataset %>%
+      filter(!!sym(mainVariable) != "") %>%
+      filter(!!sym(filterVariable) %in% filterBy)  
+  } else {
+    plotDataInitial <- dataset %>%
+      filter(!!sym(mainVariable) != "")
+  }
+  
+  # Standardized pipeline - to generate top counts - counts + proportions
+  if (!"Volume" %in% colnames(dataset)) {
+    plotData <- plotDataInitial %>%
+      group_by(!!sym(mainVariable)) %>%
+      summarise(Volume = n(), .groups = "drop") %>%
+      ungroup() %>%
+      mutate(Total = sum(Volume)) %>%
+      slice_max(Volume, n = 10) %>%
+      group_by(!!sym(mainVariable)) %>%
+      mutate(Proportion = round(Volume/Total, digits = 3))
+  } else {
+    plotData <- dataset
+  }
+  
+  
+  # x-lab angle
+  if (nrow(plotData) > 7) {
+    size <- 7
+  } else {
+    size <- 12
+  }
+  
+  # Converting to gg bar plot - geom_plot
+  plot <- plotData %>%
+    ggplot(mapping = aes(x = reorder(!!sym(mainVariable), -!!sym(viewMetric)), y = !!sym(viewMetric))) +
+    geom_bar(stat = "identity", fill = "#dd4b39", color = "black") +
+    theme_ipsum() +
+    labs() +
+    theme(axis.text.x = element_text(size = size, hjust = 1)) +
+    labs(x = mainVariable,
+         y = viewMetric,
+         title = paste0("n = ", plotData$Total[1])
+         )
+  
+  # Converting to plotly
+  plotly <- ggplotly(plot) %>%
+    layout(margin = list(t = 40, b = 15, l = 15, r = 15))
+  
+  return(plotly)
+  
+}
