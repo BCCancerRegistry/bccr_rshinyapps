@@ -1,40 +1,111 @@
 # Imaging Dashboard Server ------------------------------------------------
 
 server <- function(input, output, session) {
-
+  
   # Global items ------------------------------------------------------------
+  # Connection
+  con <- dbConnect(odbc::odbc(),
+                   Driver = "SQL Server",
+                   Server = "spdbsdima001",
+                   Database = "BCCR_Imaging_Results",
+                   Trusted_Connection = "Yes")
   # Combined result + patient data
   mainData <- reactive({
     
-    req(input$XdateMetric)
+    req(input$XdateMetric, input$authorityFilt)
     
     req(input$dateRange[2] >= input$dateRange[1])
     
-    col_map <- c(
-      "Observation Date" = 2,
-      "Results Report Date" = 3,
-      "Message Date" = 11
+    dateMap <- c(
+      "Observation Date" = "ObservationDateTime",
+      "Results Report Date" = "ResultsReportDateTime",
+      "Message Date" = "MessageDateTime"
     )
     
-    set <- resultData %>%
-      full_join(messageData, by = "MessageId") %>%
-      full_join(patientData, by = "MessageId")
+    imagingQuery <- paste0(
+                      "SELECT 
+                      p.[MessageId],
+                      p.[Identifier],
+                      p.[BirthDate],
+                      p.[Sex],
+                      p.[City],
+                      m.[SendingFacility],
+                      m.[MessageDateTime],
+                      m.[BaseMessageId],
+                      r.[ExamDescription],
+                      r.[ScheduledDateTime],
+                      r.[ObservationDateTime],
+                      r.[ResultsReportDateTime],
+                      r.[ExamType],
+                      r.[ExamTypeStd],
+                      r.[ResultStatus],
+                      r.[HealthAuthority]
+                      FROM [BCCR_Imaging_Results].[dbo].[Patient] p 
+                      JOIN [BCCR_Imaging_Results].[dbo].[Message] m 
+                      ON p.[MessageId] = m.[MessageId]
+                      JOIN [BCCR_Imaging_Results].[dbo].[Result] r
+                      ON p.[MessageId] = r.[MessageId] 
+                      WHERE [",
+                      dateMap[input$XdateMetric],
+                      "] BETWEEN '",
+                      ymd(input$dateRange[1]),
+                      "' AND '",
+                      ymd(input$dateRange[2]),
+                      "'"
+                    )
     
-    set1 <- set %>%
-      rename(date = !!colnames(set)[col_map[[input$XdateMetric]]])
-    
-    set2 <- set1 %>%
-      mutate(Week = floor_date(date, unit = "week", week_start = 1)) %>%
-      mutate(Month = floor_date(date, unit = "month")) %>%
-      filter(between(date, input$dateRange[1], input$dateRange[2])) %>%
-      filter(ChannelName %in% input$authorityFilt)
-      # filter(ExamTypeStd %in% c("CT", "MG", "MR", "NM", "PET", "US"))
-    
+    mainData <- dbGetQuery(con, imagingQuery) %>%
+      filter(HealthAuthority %in% input$authorityFilt) %>%
+      mutate(across(c(ObservationDateTime, ResultsReportDateTime, MessageDateTime), # To ensure that datetimes are displayed PST/PDT
+                    ~ ymd(as.Date(with_tz(ymd_hms(.x), tzone = "America/Los_Angeles"))) # I.e., in the case that date filter min set to
+                    ) # '2025-04-01' but some observations are displayed as '2025-03-31' due to timezone reporting difference 
+             ) %>%
+      mutate(Month = floor_date(!!sym(dateMap[input$XdateMetric]), unit = "month"),
+             Week = floor_date(!!sym(dateMap[input$XdateMetric]), unit = "week", week_start = 1),
+             ) %>%
+      mutate(BirthDate = ymd(substr(BirthDate, 1, 10)),
+             BirthDate = if_else(BirthDate <= ymd("1901-01-01"), as.Date(NA), BirthDate),
+             Identifier = if_else(Identifier == "", as.character(NA), Identifier),
+             Age = if_else(is.na(BirthDate),
+                           as.numeric(NA),
+                           floor(as.numeric(interval(BirthDate, today())/ years(1)))
+                           ),
+             City = str_to_title(City)
+            ) %>%
+      left_join(codes, by = "ExamDescription") %>%
+      mutate(
+        GroupName = ifelse(is.na(GroupName), ExamDescription, GroupName),
+        GroupName = ifelse(!ExamTypeStd %in% c("PET", "MG"), str_extract(GroupName, "^\\S+(?:\\s+\\S+)?"), GroupName),
+        GroupName = gsub(",", "", as.character(GroupName)),
+        GroupName = case_when(
+          ExamTypeStd == "CT" & GroupName == "CT Sinuses" ~ "CT Sinus",
+          ExamTypeStd == "CT" & GroupName == "CT Lower" ~ "CT Lower Extremity",
+          ExamTypeStd == "CT" & GroupName == "CT Upper" ~ "CT Upper Extremity",
+          ExamTypeStd == "CT" & GroupName == "CT Soft" ~ "CT Soft Tissue",
+          ExamTypeStd == "MG" & str_detect(GroupName, "Screening") ~ "MG Screening",
+          ExamTypeStd == "MG" & str_detect(GroupName, "Diagnostic") ~ "MG Diagnostic",
+          ExamTypeStd == "MG" & str_detect(GroupName, "Tomo") ~ "MG Tomosynthesis",
+          ExamTypeStd == "MG" & str_detect(GroupName, "Specimen|XR BREAST SPECIMEN") ~ "MG Breast Specimen",
+          ExamTypeStd == "MG" & str_detect(GroupName, "Stereo") ~ "MG Stereotactic/Stereo Core Biopsy",
+          ExamTypeStd == "MG" & str_detect(GroupName, "Consult|MAM-CON") ~ "MG Consultation",
+          ExamTypeStd == "MG" & str_detect(GroupName, "Breast Clip") ~ "MG Breast Clip Placement",
+          ExamTypeStd == "MG" & str_detect(GroupName, "Contrast") ~ "MG Mammogram w/ Contrast",
+          ExamTypeStd == "US" & GroupName %in% c("US Extremity", "US Lower", "US Upper") ~ "US Extremities",
+          ExamTypeStd == "US" & GroupName %in% c("US OB") ~ "US Obstetrical",
+          ExamTypeStd == "US" & GroupName %in% c("US Soft", "US Mass") ~ "US Soft Tissue",
+          ExamTypeStd == "US" & GroupName == "US-CON" ~ "US Consultation",
+          ExamTypeStd == "MR" & str_detect(GroupName, "MR Spine|MRI Spine") ~ "MR/MRI Spine",
+          ExamTypeStd == "MR" & str_detect(GroupName, "MR Head|MRI Head") ~ "MR/MRI Head",
+          TRUE ~ GroupName
+        ),
+        GroupName = replace(GroupName, is.na(GroupName), "NA")
+      )
+
   })
   
   # Global Date Switch 
   output$globalDateSwitch <- renderUI({
-  
+    
     # req(input$XdateMetric)
     
     startDate <- ifelse(input$XdateMetric == "Message Date",
@@ -47,7 +118,7 @@ server <- function(input, output, session) {
       label = "Filter by Date:",
       min = startDate,
       max = today(),
-      start = ymd("2025-04-01"),
+      start = ymd("2025-06-01"),
       end = today()
     )
     
@@ -72,13 +143,12 @@ server <- function(input, output, session) {
         groupChoices <- "Month"
       }
       
+      selectedMetric <- "Month"
       if (floor_date(input$dateRange[2], unit = "month") == floor_date(input$dateRange[1], unit = "month")) {
         selectedMetric <- "Day"
       } else if (((diff_in_days / 365) * 12) <= 2.5) {
         selectedMetric <- "Week" 
-      } else {
-        selectedMetric <- "Month"
-      }
+      } 
       
       selectInput("XbreakFreq",
                   label = "Select Date Grouping:",
@@ -115,13 +185,19 @@ server <- function(input, output, session) {
     
     req(length(input$authorityFilt) > 0, length(input$timeSeriesExam) > 0)
     
+    dateMap <- c(
+      "Observation Date" = "ObservationDateTime",
+      "Results Report Date" = "ResultsReportDateTime",
+      "Message Date" = "MessageDateTime"
+    )
+    
     diffDays <- as.numeric(difftime(input$dateRange[2], input$dateRange[1], units = "days"))
     
     diffMonths <- as.numeric(difftime(input$dateRange[2], input$dateRange[1], units = "days") / 365) * 12
     
     if (input$XbreakFreq == "Day") {
       breakFreq <- "1 day"
-      metric <- sym("date")
+      metric <- sym(dateMap[input$XdateMetric])
       date_label <- "%b %d %Y"
     } else if (input$XbreakFreq == "Week") {
       breakFreq <- "1 week"
@@ -136,13 +212,13 @@ server <- function(input, output, session) {
     if (input$timeSeriesSeries == "Exam Type") {
       colorSeries <- sym("ExamTypeStd")
     } else if (input$timeSeriesSeries == "Health Authority") {
-      colorSeries <- sym("ChannelName")
+      colorSeries <- sym("HealthAuthority")
     }
     
     plotData <- mainData() %>%
       filter(ExamTypeStd %in% input$timeSeriesExam) %>%
       group_by(!!metric, !!colorSeries) %>%
-      summarise(Volume = n()) %>%
+      summarise(Volume = n(), .groups = "drop") %>%
       ungroup() %>%
       mutate(total = sum(Volume)) %>%
       group_by(!!metric, !!colorSeries) %>%
@@ -169,30 +245,24 @@ server <- function(input, output, session) {
     
     req(mainData(), input$XbreakFreq, input$dateRange)
     
-    colorVar <- switch(input$timeSeriesSeries,
-                       "Exam Type" = "ExamTypeStd",
-                       "Health Authority" = "ChannelName")
+    dateMetric <- switch(input$XdateMetric,
+                         "Observation Date" = "ObservationDateTime",
+                         "Results Report Date" = "ResultsReportDateTime",
+                         "Message Date" = "MessageDateTime")
     
-    colorSym <- sym(colorVar)
-    
-    theData <- mainData() %>%
-      filter(ExamTypeStd %in% input$timeSeriesExam) %>%
-      filter(!!colorSym != "") %>%
-      group_by(date, !!colorSym) %>%
-      summarise(Volume = sum(n()), .groups = "drop")
-    
-    table <- getStats(input$dateRange[1], input$dateRange[2], theData, colorVar)
-    
+    viewVariable <- switch(input$timeSeriesSeries,
+                           "Exam Type" = "ExamTypeStd",
+                           "Health Authority" = "HealthAuthority")
+  
     if (input$XbreakFreq == "Day") {
-      table <- table %>%
-        select(1:5, 14)
+      summaryTable <- getTimeSummary(mainData(), dateMetric, viewVariable, "Daily")
     } else if (input$XbreakFreq == "Week") {
-      table <- table %>%
-        select(1, 6:9, 14)
+      summaryTable <- getTimeSummary(mainData(), "Week", viewVariable, "Weekly")
     } else {
-      table <- table %>%
-        select(1, 10:14)
+      summaryTable <- getTimeSummary(mainData(), "Month", viewVariable, "Monthly")
     }
+    
+    return(summaryTable)
     
   })
   
@@ -208,16 +278,19 @@ server <- function(input, output, session) {
   # Outlier data 
   outlierData <- reactive({
     
-    req(input$timeSeriesSeries, input$XbreakFreq)
+    req(mainData(), input$timeSeriesSeries, input$XbreakFreq, input$XdateMetric)
 
     dateType <- switch(input$XbreakFreq,
-                       "Day" = "date",
+                       "Day" = switch(input$XdateMetric,
+                                      "Observation Date" = "ObservationDateTime",
+                                      "Results Report Date" = "ResultsReportDateTime",
+                                      "Message Date" = "MessageDateTime"),
                        "Week" = "Week",
                        "Month" = "Month")
     
     colorVar <- switch(input$timeSeriesSeries,
                        "Exam Type" = "ExamTypeStd",
-                       "Health Authority" = "ChannelName")
+                       "Health Authority" = "HealthAuthority")
 
     dateType <- sym(dateType)
 
@@ -272,8 +345,8 @@ server <- function(input, output, session) {
     
     pickerInput("authorityFilt",
                 label = paste0("Filter by Health Authority:"),
-                choices = unique(messageData$ChannelName),
-                selected = unique(messageData$ChannelName),
+                choices = c("FHA", "IHA", "NHA", "PHSA", "VCH-PHC", "VCHA", "VIHA"),
+                selected = c("FHA", "IHA", "NHA", "PHSA", "VCH-PHC", "VCHA", "VIHA"),
                 multiple = TRUE,
                 options = list(
                   'actions-box' = TRUE 
@@ -282,7 +355,6 @@ server <- function(input, output, session) {
     
   })
   
-
   # Tab 2 - Exam Types ------------------------------------------------------
   
   # Total sum of Exam Types (Std)
@@ -290,162 +362,32 @@ server <- function(input, output, session) {
     
     req(mainData(), input$examType)
     
-    examType <- mainData() %>%
-      filter(ExamTypeStd != "") %>%
-      group_by(ExamTypeStd) %>%
-      summarise(Volume = n()) %>%
-      ungroup() %>%
-      mutate(total = sum(Volume)) %>%
-      group_by(ExamTypeStd) %>%
-      mutate(Proportion = round(Volume/total, digits = 3)) %>%
-      select(1, 2, 4) %>%
-      arrange(desc(Volume)) 
-    
-    examPlot <- examType %>%
-      ggplot(mapping = aes(x = ExamTypeStd, y = !!sym(input$XtypeReports))) +
-      geom_bar(stat = "identity", fill = "#dd4b39", color = "black") +
-      theme_ipsum() +
-      labs(title = paste0("n = ", nrow(mainData())))
-    
-    ggplotly(examPlot) %>%
-      layout(margin = list(t = 50, b = 10))
-    
-  })
-  
-  # Mapping Exam Descriptions to a consistent format
-  examDescription <- reactive({
-    
-    req(input$examType, input$examViewSwitch)
-    
-    grouped <- mainData() %>%
-      filter(ExamTypeStd != "") %>%
-      filter(ExamTypeStd == input$examType)
-    
-    # Category consolidation
-    if (input$examType == "CT") {
-      grouped1 <- grouped %>%
-        group_by(ExamDescription) %>%
-        summarise(count = n()) %>%
-        left_join(codes, by = "ExamDescription") %>%
-        mutate(GroupName = ifelse(is.na(GroupName), ExamDescription, GroupName),
-               GroupName = str_extract(GroupName, "^\\S+(?:\\s+\\S+)?"),
-               GroupName = gsub(",", "", as.character(GroupName)),
-               GroupName = case_when(
-                 GroupName == "CT Sinuses" ~ "CT Sinus",
-                 GroupName == "CT Lower" ~ "CT Lower Extremity",
-                 GroupName == "CT Upper" ~ "CT Upper Extremity",
-                 GroupName == "CT Soft" ~ "CT Soft Tissue",
-                 TRUE ~ GroupName
-               )
-        )
-    } else if (input$examType == "MR") {
-      grouped1 <- grouped %>%
-        group_by(ExamDescription) %>%
-        summarise(count = n()) %>%
-        left_join(codes, by = "ExamDescription") %>%
-        mutate(GroupName = ifelse(is.na(GroupName), ExamDescription, GroupName)) %>%
-        mutate(GroupName = str_extract(GroupName, "^\\S+(?:\\s+\\S+)?"))
-    } else if (input$examType == "MG") {
-      grouped1 <- grouped %>%
-        # mutate(ExamDescription = case_when(
-        #   str_detect(ExamDescription, "^[A-Z]{4}.*") ~ paste0("MP", ExamDescription),
-        #   TRUE ~ ExamDescription
-        # )) %>%
-        group_by(ExamDescription) %>%
-        summarise(count = n(), .groups = "drop") %>%
-        left_join(codes, by = "ExamDescription") %>%
-        mutate(GroupName = ifelse(is.na(GroupName), ExamDescription, GroupName),
-               GroupName = case_when(
-                 str_detect(GroupName, "Screening") ~ "MG Screening",
-                 str_detect(GroupName, "Diagnostic") ~ "MG Diagnostic",
-                 str_detect(GroupName, "Tomo") ~ "MG Tomosynthesis",
-                 str_detect(GroupName, "Specimen") ~ "MG Breast Specimen",
-                 str_detect(GroupName, "Stereo") ~ "MG Stereotactic/Stereo Core Biopsy",
-                 str_detect(GroupName, "Consult") ~ "MG Consultation",
-                 str_detect(GroupName, "XR BREAST SPECIMEN") ~ "MG Breast Specimen",
-                 str_detect(GroupName, "MAM-CON") ~ "MG Consultation",
-                 TRUE ~ GroupName
-               )
-        )
-    } else if (input$examType == "NM") {
-      grouped1 <- grouped %>%
-        group_by(ExamDescription) %>%
-        summarise(count = n()) %>%
-        left_join(codes, by = "ExamDescription") %>%
-        mutate(GroupName = ifelse(is.na(GroupName), ExamDescription, GroupName)) %>%
-        mutate(GroupName = str_extract(GroupName, "^\\S+(?:\\s+\\S+)?")) 
-    } else if (input$examType == "US") {
-      grouped1 <- grouped %>%
-        # mutate(ExamDescription = case_when(
-        #   str_detect(ExamDescription, "^[A-Z]+$") ~ paste0("US", ExamDescription),
-        #   TRUE ~ ExamDescription
-        # )) %>%
-        group_by(ExamDescription) %>%
-        summarise(count = n()) %>%
-        left_join(codes, by = "ExamDescription") %>%
-        mutate(GroupName = ifelse(is.na(GroupName), ExamDescription, GroupName),
-               GroupName = str_extract(GroupName, "^\\S+(?:\\s+\\S+)?"),
-               GroupName = case_when(
-                 GroupName == "US Extremity" ~ "US Extremities",
-                 GroupName == "US Lower" ~ "US Extremities",
-                 GroupName == "US Upper" ~ "US Extremities",
-                 GroupName == "US OB" ~ "US Obstetrical",
-                 GroupName == "US Soft" ~ "US Soft Tissue",
-                 GroupName == "US Mass" ~ "US Soft Tissue",
-                 GroupName == "US-CON" ~ "US Consultation",
-                 TRUE ~ GroupName
-               )
-        )
-    } else if (input$examType == "PET") {
-      grouped1 <- grouped %>%
-        group_by(ExamDescription) %>%
-        summarise(count = n()) %>%
-        left_join(codes, by = "ExamDescription") %>%
-        mutate(GroupName = ifelse(is.na(GroupName), ExamDescription, GroupName))
-    }
-    
-    grouped2 <- grouped1 %>%
-      group_by(GroupName) %>%
-      summarise(Volume = sum(count)) %>%
-      ungroup() %>%
-      mutate(Proportion = round(Volume/sum(Volume), digits = 4),
-             GroupName = replace(GroupName, is.na(GroupName), "NA")
-      )
+    plotly <- getBarPlotly(mainData(), "ExamTypeStd", input$XtypeReports, "", "")
     
   })
   
   # Exam Description Plot
   output$examDescriptionPlot <- renderPlotly({
     
-    req(input$examType, input$examViewSwitch, examDescription(), input$XtypeExaminations)
+    req(input$examType, input$examViewSwitch, input$XtypeExaminations)
     
-    if (input$examType %in% c("US", "MR", "CT")) {
-      grouped <- examDescription() %>%
-        slice_max(!!sym(input$XtypeExaminations), n = 20) 
-    } else if (input$examType %in% c("PET", "NM", "MG")) {
-      grouped <- examDescription() %>%
-        slice_max(!!sym(input$XtypeExaminations), n = 10) 
-    }
-    
-    ggplot <- grouped %>%
-      ggplot(mapping = aes(x = GroupName, y = !!sym(input$XtypeExaminations))) +
-      geom_bar(stat = "identity", fill = "#dd4b39", color = "black") +
-      theme_ipsum() + 
-      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-      scale_x_discrete(limits = grouped$GroupName) + 
-      labs(title = paste0("n = ", sum(examDescription()$Volume)))
-    
-    plot <- ggplotly(ggplot) %>%
-      layout(margin = list(t = 50, b = 30))
+    plotly <- getBarPlotly(mainData(), "GroupName", input$XtypeExaminations, "ExamTypeStd", input$examType)
     
   })
   
   # Full Exam Description Data, formatted in table
   output$examDescriptionTable <- renderDT({
     
-    req(examDescription())
+    req(mainData())
     
-    grouped <- examDescription() %>%
+    grouped <- mainData() %>%
+      filter(ExamTypeStd != "") %>%
+      filter(ExamTypeStd == input$examType) %>%
+      group_by(GroupName) %>%
+      summarise(Volume = sum(n())) %>%
+      ungroup() %>%
+      mutate(Proportion = round(Volume/sum(Volume), digits = 3)
+      ) %>%
       arrange(desc(Volume))
     
     datatable(grouped,
@@ -487,46 +429,33 @@ server <- function(input, output, session) {
 
   # Tab 3 - Message Data ----------------------------------------------------
 
+  # Health Authority Bar Plot
   output$channelPlot <- renderPlotly({
     
     req(input$XtypeAuthority, input$dateRange)
     
-    channels <- messageData %>%
-      filter(between(MessageDateTime, input$dateRange[1], input$dateRange[2])) %>%
-      count(ChannelName, name = "Volume") %>%
-      mutate(
-        total = sum(Volume),
-        Proportion = round(Volume/total, digits = 3)
-      )
-    
-    plot <- channels %>%
-      ggplot(mapping = aes(x = ChannelName, y = !!sym(input$XtypeAuthority))) +
-      geom_bar(stat = "identity", fill = "#dd4b39", color = "black") +
-      theme_ipsum() +
-      labs(title = paste0("n = ", sum(channels$Volume)))
-    
-    channelsPlot <- ggplotly(plot) %>%
-      layout(margin = list(t = 50, b = 30))
+    plotly <- getBarPlotly(mainData(), "HealthAuthority", input$XtypeAuthority, "", "")
     
   })
   
+  # Table of Facilities
   output$facilityTable <- renderDT({
     
     req(length(input$facilityHA) > 0)
     
-    sendingFacilities <- messageData %>%
-      filter(between(MessageDateTime, input$dateRange[1], input$dateRange[2])) %>%
+    sendingFacilities <- mainData() %>%
+      # filter(between(MessageDateTime, input$dateRange[1], input$dateRange[2])) %>%
       mutate(SendingFacility = if_else(
         str_detect(SendingFacility, "_"),
         str_sub(SendingFacility, 1, 3),
         SendingFacility
       )) %>%
-      filter(ChannelName %in% input$facilityHA) 
+      filter(HealthAuthority %in% input$facilityHA) 
     
     total <- nrow(sendingFacilities)
     
     summary <- sendingFacilities %>%
-      group_by(ChannelName, SendingFacility) %>%
+      group_by(HealthAuthority, SendingFacility) %>%
       summarise(Volume = n(), Proportion = round(Volume/total, digits = 2), groups = "drop") %>%
       arrange(desc(Volume)) %>%
       select(2, 1, 3, 4) %>%
@@ -536,6 +465,7 @@ server <- function(input, output, session) {
     
   })
   
+  # Data Completeness Table - to show "incompletes" (where obs is "NA")
   output$dataComplete <- renderDT({
     
     req(mainData())
@@ -573,9 +503,10 @@ server <- function(input, output, session) {
   # Distribution of number of reports per patient 
   output$reportsPerPatient <- renderPlotly({
     
-    req(input$demoMetric)
+    req(input$demoMetric, input$demoExamType)
     
     numberReports <- mainData() %>%
+      filter(ExamTypeStd %in% input$demoExamType) %>%
       group_by(Identifier) %>%
       summarise(reports_per_patient = n()) %>%
       arrange(desc(reports_per_patient)) %>%
@@ -601,10 +532,11 @@ server <- function(input, output, session) {
   # Age of patients (distinct) - 10 year age brackets
   output$patientAgePlot <- renderPlotly({
     
-    req(input$demoMetric, length(input$authorityFilt) > 0)
+    req(input$demoMetric, length(input$authorityFilt) > 0, input$demoExamType)
     
     mainData <- mainData() %>%
       distinct(Identifier, .keep_all = TRUE) %>%
+      filter(ExamTypeStd %in% input$demoExamType) %>%
       filter(!is.na(BirthDate))
     
     ageBrackets <- mainData %>%
@@ -633,16 +565,17 @@ server <- function(input, output, session) {
            y = "Volume")
     
     numberReportsPlot <- ggplotly(plot) %>%
-      layout(margin = list(t = 50, b = 10))
+      layout(margin = list(t = 50, b = 10, l = 10, r = 10))
     
   })
   
   # Overall sex distribution of patients 
   output$sexPlot <- renderPlotly({
     
-    req(input$demoMetric)
+    req(input$demoMetric, input$demoExamType)
     
     mainData <- mainData() %>%
+      filter(ExamTypeStd %in% input$demoExamType) %>%
       distinct(Identifier, .keep_all = TRUE)
     
     sexDistribution <- mainData %>%
@@ -658,17 +591,18 @@ server <- function(input, output, session) {
       theme_ipsum() +
       labs(title = paste0("n = ", sum(sexDistribution$Volume)))
     
-    sexPlot <- ggplotly(plot, height = 400) %>%
-      layout(margin = list(t = 50, b = 30))
+    sexPlot <- ggplotly(plot) %>%
+      layout(margin = list(t = 50, b = 10, l = 10, r = 10))
     
   })
   
   # Plot of reports - from the 10 most frequent patient cities, based on address
   output$cityPlot <- renderPlotly({
     
-    req(input$demoMetric)
+    req(input$demoMetric, input$demoExamType)
     
     mainData <- mainData() %>%
+      filter(ExamTypeStd %in% input$demoExamType) %>%
       distinct(Identifier, .keep_all = TRUE)
     
     cityDistribution <- mainData %>%
@@ -688,8 +622,8 @@ server <- function(input, output, session) {
            y = input$demoMetric,
            title = paste0("n = ", sum(cityDistribution$Volume)))
     
-    cityPlot <- ggplotly(plot, height = 400) %>%
-      layout(margin = list(t = 50, b = 30))
+    cityPlot <- ggplotly(plot) %>%
+      layout(margin = list(t = 50, b = 10, l = 10, r = 10))
     
   })
   
