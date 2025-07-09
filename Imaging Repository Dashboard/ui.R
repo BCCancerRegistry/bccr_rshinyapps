@@ -34,8 +34,8 @@ ui <- dashboardPage(skin = "red",
                       conditionalPanel("!(['Message Data', 'Time Series'].includes(input.tabs))",
                         pickerInput("authorityFilt",
                                     label = "Select Health Authorities:",
-                                    choices = unique(messageData$ChannelName),
-                                    selected = unique(messageData$ChannelName),
+                                    choices = unique(distinctAuthority$HealthAuthority),
+                                    selected = unique(distinctAuthority$HealthAuthority),
                                     multiple = TRUE,
                                     options = list(
                                       'actions-box' = TRUE 
@@ -43,12 +43,19 @@ ui <- dashboardPage(skin = "red",
                         )
                       ),
                       conditionalPanel("input.tabs == 'Demographic Analysis'",
+                                       pickerInput("demoExamType",
+                                                   label = paste0("Filter by Exam Type Standardized:"),
+                                                   choices = unique(distinctExamType$ExamTypeStd),
+                                                   selected = unique(distinctExamType$ExamTypeStd),
+                                                   multiple = TRUE,
+                                                   options = list('actions-box' = TRUE)
+                                                   ),
                                        pickerInput("demoMetric",
                                                    label = "Select Metric:",
                                                    choices = c("Volume", "Proportion"),
                                                    selected = "Volume",
                                                    multiple = FALSE
-                                       )
+                                                   )
                       ),
                       conditionalPanel("input.tabs == 'Time Series'",
                                        sidebarMenu(
@@ -65,8 +72,8 @@ ui <- dashboardPage(skin = "red",
                                            ),
                                            pickerInput("timeSeriesExam",
                                                        label = paste0("Filter by Exam Type Standardized:"),
-                                                       choices = c("CT", "MG", "MR", "NM", "PET", "US", "RF"),
-                                                       selected = c("CT", "MG", "MR", "NM", "PET", "US", "RF"),
+                                                       choices = unique(distinctExamType$ExamTypeStd),
+                                                       selected = unique(distinctExamType$ExamTypeStd),
                                                        multiple = TRUE,
                                                        options = list(
                                                          'actions-box' = TRUE 
@@ -177,7 +184,7 @@ ui <- dashboardPage(skin = "red",
                                                                        )
                                                            )
                                                   ),
-                                                  plotlyOutput("typeReports", height = "500px"),
+                                                  plotlyOutput("typeReports"),
                                                   width = 12
                                               )
                                           )   
@@ -192,7 +199,7 @@ ui <- dashboardPage(skin = "red",
                                                   column(2,
                                                          selectInput("examType",
                                                                      label = "Select Exam Type:",
-                                                                     choices = c("CT", "MG", "MR", "NM", "PET", "US"),
+                                                                     choices = unique(distinctExamType$ExamTypeStd),
                                                                      multiple = FALSE,
                                                                      width = "200px"
                                                          )
@@ -249,8 +256,8 @@ ui <- dashboardPage(skin = "red",
                                                   column(4,
                                                          pickerInput("facilityHA",
                                                                      label = "Select Health Authorities:",
-                                                                     choices = unique(messageData$ChannelName),
-                                                                     selected = unique(messageData$ChannelName),
+                                                                     choices = unique(distinctAuthority$HealthAuthority),
+                                                                     selected = unique(distinctAuthority$HealthAuthority),
                                                                      multiple = TRUE,
                                                                      width = "300px",
                                                                      options = list(
