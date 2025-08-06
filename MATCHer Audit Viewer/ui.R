@@ -1,3 +1,4 @@
+# MATCHer UI ------------------------------------------------------
 
 ui <- dashboardPage(skin = "yellow",
                     dashboardHeader(
@@ -29,8 +30,7 @@ ui <- dashboardPage(skin = "yellow",
                         label = "Save changes to server",
                         icon = icon("plus-circle"),
                         size = "sm",
-                        color = "warning",
-                        style = "jelly"
+                        color = "warning"
                       ),
                       br(),
                       conditionalPanel(
@@ -90,27 +90,40 @@ ui <- dashboardPage(skin = "yellow",
                         label = "Filter TR DX Groups:",
                         choices = dxGroups,
                         multiple = TRUE,
-                        selected = dxGroups
+                        selected = dxGroups,
+                        options = list(
+                          "actions-box" = TRUE
+                        )
                       ),
                       pickerInput(
                         "DS_DX_Select",
                         label = "Filter DS DX Groups:",
                         choices = dxGroups,
                         multiple = TRUE,
-                        selected = dxGroups
+                        selected = dxGroups,
+                        options = list(
+                          "actions-box" = TRUE
+                        )
                       ),
                       pickerInput(
-                        "css_Blanks",
-                        label = "Filter unresolved audits:",
-                        choices = c("Missing SD Reportability",
-                                    "Missing SD DX Group", 
-                                    "Missing SD Comment"),
+                        "ccs_Blanks",
+                        label = "Filter CCS Edited Audits:",
+                        choices = c("Yes", "No"),
                         multiple = TRUE,
-                        selected = NULL
+                        selected = c("Yes", "No"),
+                        options = list(
+                          "actions-box" = TRUE
+                        )
                       )
                     ),
                     dashboardBody(
                       tags$head(
+                        tags$script(HTML("
+                          window.onbeforeunload = function(e) {
+                            e.preventDefault();  // For some browsers
+                            e.returnValue = '';  // Standard compliant
+                          };
+                        ")),
                         tags$style(HTML("
                             body, h1, h2, h3, h4, h5, h6 {
                               font-family: 'Arial Narrow', sans-serif;
@@ -119,7 +132,7 @@ ui <- dashboardPage(skin = "yellow",
                               font-family: 'Arial Narrow', sans-serif;
                             }
                             .skin-red .main-header .navbar {
-                              font-family: 'Arial Narrow', sans-serif; 
+                              font-family: 'Arial Narrow', sans-serif;
                             }
                             .skin-red .main-sidebar {
                               font-family: 'Arial Narrow', sans-serif;
@@ -141,7 +154,7 @@ ui <- dashboardPage(skin = "yellow",
                               position: fixed;
                               top: 50px;
                               z-index: 1000;
-                            }
+                            };
                         "))
                       ),
                       fluidRow(
