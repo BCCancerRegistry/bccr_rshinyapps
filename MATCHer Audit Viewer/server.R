@@ -1,28 +1,124 @@
-#####
+##### MATCHer Server
 
 server <- function(input, output, session) {
   
-  # Base server dataset
+  # Production Server Connection
+  productionCon <- dbConnect(odbc::odbc(),
+                             Driver = "SQL Server",
+                             Server = "spdbsmarc001",
+                             Database = "eMaRCPlus_V90_Audit",
+                             Trusted_Connection = "Yes")
+  
+  # Backup RDS Properties
+  output$backupProperty <- renderDT({
+    
+    if (file.exists("insert backup file directory here")) {
+      data <- as.data.frame(file.info("insert backup file directory here")) %>%
+        select(4, 8) %>%
+        mutate(
+          mtime = mtime %>%
+            ymd_hms(tz = "UTC") %>%
+            format("%Y-%m-%d %H:%M:%S")
+        ) %>%
+        rename("Last Modified" = 1,
+               "User" = 2)
+      
+      datatable(
+        data,
+        options = list(
+          dom = 't' 
+        )
+      )
+    }
+    
+  })
+  
+  # Modal Dialog - For selecting whether to restore previous state
+  observe({
+    if (file.exists("insert backup file directory here")) {
+      showModal(
+        modalDialog(
+          title = "Load Previous State?",
+          box(title = "Previous State Properties",
+              DTOutput("backupProperty"),
+              width = 12,
+              solidHeader = TRUE,
+              status = "warning",
+              br(),
+              fluidRow(
+                column(6, align = "center",
+                       actionBttn("restore",
+                                  label = "Restore State",
+                                  color = "warning",
+                                  style = "jelly")
+                ),
+                column(6, align = "center",
+                       actionBttn("clean",
+                                  label = "Use Empty State",
+                                  color = "warning")
+                )
+              )
+          ),
+          easyClose = FALSE,
+          size = "l"
+        )
+      )
+    }
+  })
+  
+  # Loading pulling specific message
+  output$selectedMessage <- renderText({
+    
+    req(mainData())
+    
+    messageQuery <- paste0("SELECT [message] FROM [eMaRCPLus_v60Patch].[dbo].[bccr_reportability_filter] WHERE msgid = ",
+                           mainData()$prod_msgid[rv$theRow])
+    
+    messageText <- dbGetQuery(productionCon, messageQuery)
+    
+    return(messageText[1, 1])
+    
+  })
+  
+  # Baseline dataset
+  baseData <- reactiveVal(audit)
+  
+  # Dataset for filtering and viewing
   mainData <- reactiveVal()
   
-  # Applying filters
+  # Observe - Restore Previous State
+  observeEvent(input$restore, {
+    # Merge inputs from backup to baseData
+    baseData(backup)
+    removeModal()
+  })
+  
+  # Observe - Do not restore previous state (clean slate)
+  observeEvent(input$clean, {
+    removeModal()
+  })
+  
+  # Applying filters - for viewing
   observe({
+    
     req(input$filterSelect, 
         input$TR_R_Select,
         input$DS_R_Select,
         input$TR_DX_Select,
         input$DS_DX_Select,
         input$dateFilter,
-        input$ID_Range)
+        input$ID_Range,
+        input$ccs_Blanks)
     
-    filterAudit <- audit %>%
+    filterAudit <- baseData() %>%
       filter(tr_reportability %in% input$TR_R_Select) %>%
       filter(ds_reportability %in% input$DS_R_Select) %>%
       filter(tr_dxgroup %in% input$TR_DX_Select) %>%
       filter(ds_dx_group %in% input$DS_DX_Select) %>%
       filter(import_dt_time %in% input$dateFilter) %>%
-      filter(audit_msgid >= input$ID_Range[1] & audit_msgid <= input$ID_Range[2])
-    
+      filter(audit_msgid >= input$ID_Range[1] & audit_msgid <= input$ID_Range[2]) %>%
+      filter(ccs_edited %in% input$ccs_Blanks)
+      
     if (input$searchID == TRUE) {
       filterAudit <- filterAudit %>%
         filter(audit_msgid %in% input$ID_Range_2)
@@ -43,45 +139,51 @@ server <- function(input, output, session) {
                           filterAudit
     )
     
-  
-    if ("Missing SD Reportability" %in% input$css_Blanks) {
-      filterAudit <- filterAudit %>%
-        filter(is.na(filterAudit$sd_reportability))
-    } 
-    
-    if ("Missing SD DX Group" %in% input$css_Blanks) {
-      filterAudit <- filterAudit %>%
-        filter(is.na(filterAudit$sd_dx_group))
-    } 
-    
-    if ("Missing SD Comment" %in% input$css_Blanks) {
-      filterAudit <- filterAudit %>%
-        filter(filterAudit$sd_comment == "")
-    } 
+    # Sort by ascending audit_msgid
+    filterAudit <- filterAudit %>%
+      arrange(audit_msgid)
       
+    # Merge
     mainData(filterAudit)
     
   })
   
-  # Mini-table for DX group comparison within the modal dialog
-  output$mainTable = renderDT({
+  # Main Table for Editing
+  output$mainTable <- renderDT({
     
     req(input$filterSelect, mainData())
     
-    dataRender <- mainData() %>%
-      select(-7, -8)
+    page <- isolate(input$current_page)
+    page <- if (is.null(page)) 1 else page
+    
+    render <- mainData() %>%
+      select(1:7, 10:13)
     
     datatable(
-      dataRender,
+      render,
       editable = "cell",
       selection = "single",
       options = list(
         pageLength = 20,
         ordering = FALSE,
-        searching = FALSE
-      )
+        searching = FALSE,
+        drawCallback = JS(
+          "function(settings) {",
+          "  var page = settings._iDisplayStart / settings._iDisplayLength + 1;",
+          "  Shiny.setInputValue('current_page', page, {priority: 'event'});",
+          "}"
+        ),
+        initComplete = JS(
+          sprintf(
+            "function(settings, json) { this.api().page(%s - 1).draw(false); }",
+            page
+          )
+        )
+      ),
+      rownames = FALSE
     )
-  })
+    
+  }, server = TRUE)
   
   # Mini-table for reportability comparison within the modal dialog
   output$reportTable = renderTable({
@@ -89,7 +191,7 @@ server <- function(input, output, session) {
     
     row <- rv$theRow
     
-    mainData()[row, c(3:4)]
+    mainData()[row, c(4:5)]
   }, width = "100%", striped = TRUE, bordered = TRUE, hover = TRUE)
   
   # Mini-table for DX group comparison within the modal dialog
@@ -98,25 +200,37 @@ server <- function(input, output, session) {
     
     row <- rv$theRow
     
-    mainData()[row, c(5:6)]
+    mainData()[row, c(6:7)]
   }, width = "100%", striped = TRUE, bordered = TRUE, hover = TRUE)
   
   # Refreshing the modal dialog
   updateModal <- function() {
+    
     req(mainData())
     
     if (length(rv$theRow) > 0) {
       showModal(
         modalDialog(
-          title = paste0("Showing Audit #", mainData()$audit_msgid[rv$theRow]),
-          # h1(message),
+          title = paste0("Showing Audit #", mainData()$audit_msgid[rv$theRow],
+                         " (Message #", mainData()$prod_msgid[rv$theRow], ")"),
+          box(
+            div(
+              style = "max-height: 300px; overflow-y: auto;",
+              htmlOutput("selectedMessage")
+            ), 
+            solidHeader = TRUE,
+            width = 12,
+            title = "View Full Message",
+            collapsible = TRUE,
+            collapsed = TRUE
+          ),
           box(
             title = "Reportability",
             tableOutput("reportTable"),
             br(),
             pickerInput(
-              "sd_reportability_new",
-              label = "SD Reportability:",
+              "ccs_reportability_new",
+              label = "CCS Reportability:",
               choices = c("Yes", "No", NA),
               selected = mainData()$tr_reportability[rv$theRow]
             ),
@@ -128,8 +242,8 @@ server <- function(input, output, session) {
             tableOutput("dxTable"),
             br(),
             pickerInput(
-              "sd_dx_group_new",
-              label = "SD DX Group:",
+              "ccs_dx_class_new",
+              label = "CCS DX Group:",
               choices = c(dxGroups, NA),
               selected = mainData()$tr_dxgroup[rv$theRow]
             ),
@@ -164,19 +278,15 @@ server <- function(input, output, session) {
   
   # Modal Dialog
   observeEvent(input$mainTable_rows_selected, {
+    
     req(mainData(), input$mainTable_rows_selected)
     
     rv$theRow <- input$mainTable_rows_selected
     
     table <- c(mainData()$audit_msgid[rv$theRow])
     
-    message <- ""
-    
-    if (mainData()$match_reportability_ds_tr[rv$theRow] == 0) {
-      message <- "Reportability mismatched"
-    }
-    
     updateModal()
+    
   })
   
   # Modal Dialog Previous Row
@@ -189,6 +299,7 @@ server <- function(input, output, session) {
     }
     
     updateModal()
+    
   })
   
   # Modal Dialog Next Row
@@ -201,30 +312,35 @@ server <- function(input, output, session) {
     }
     
     updateModal()
+    
   })
   
-  # Modal Dialog Submit, to internal data
+  # Update local datasets
   observeEvent(input$submit, {
     
     req(mainData())
     
-    # Updating the server environment
+    auditIndex <- mainData()$audit_msgid[rv$theRow]
+    
+    # Updating dataset for viewing
     newData <- mainData()
-    
-    newData$sd_reportability[rv$theRow] <- input$sd_reportability_new
-    
-    newData$sd_dx_group[rv$theRow] <- input$sd_dx_group_new
-    
-    newData$sd_comment[rv$theRow] <- input$comment
+   
+    newData$ccs_reportability[newData$audit_msgid == auditIndex] <- input$ccs_reportability_new
+    newData$ccs_dx_class[newData$audit_msgid == auditIndex] <- input$ccs_dx_class_new
+    newData$ccs_dx_class_comment[newData$audit_msgid == auditIndex] <- input$comment
+    newData$ccs_edited[newData$audit_msgid == auditIndex] <- "Yes"
     
     mainData(newData)
     
-    # Updating the global environment, data there
-    audit$sd_reportability[rv$theRow] <<- input$sd_reportability_new
+    # Updating baseline dataset for editing and writing
+    baseData <- baseData()
     
-    audit$sd_dx_group[rv$theRow] <<- input$sd_dx_group_new
+    baseData$ccs_reportability[baseData$audit_msgid == auditIndex] <- input$ccs_reportability_new
+    baseData$ccs_dx_class[baseData$audit_msgid == auditIndex] <- input$ccs_dx_class_new
+    baseData$ccs_dx_class_comment[baseData$audit_msgid == auditIndex] <- input$comment
+    baseData$ccs_edited[baseData$audit_msgid == auditIndex] <- "Yes"
     
-    audit$sd_comment[rv$theRow] <<- input$comment
+    baseData(baseData)
 
     # Next row
     if (rv$theRow < nrow(mainData())) {
@@ -232,43 +348,49 @@ server <- function(input, output, session) {
       updateModal()
     }
     
-    showNotification("Fields updated successfully!", type = "message")
+    # Save backup
+    saveRDS(baseData(), file = "audit_input_backup.rds")
+    
+    showNotification(paste0("Fields updated successfully!"), type = "message")
     
   })
   
   # Submit function, to write changes to the server
   observeEvent(input$submitChanges, {
     
-    # for (i in audit$audit_msgid) {
-    #   if (audit$sd_comment != mainData()$sd_comment[i]) {
-    #     audit$sd_comment<- mainData()$sd_comment[i]
-    #   }
-    # }
+    edited <- baseData() %>%
+      filter(ccs_edited == "Yes") %>%
+      select(audit_msgid,
+             ccs_reportability,
+             ccs_dx_class,
+             ccs_dx_class_comment)
     
-    audit$sd_dx_group <- mainData()$sd_dx_group[match(audit$audit_msgid, mainData()$audit_msgid)]
-    
-    audit$sd_reportability <- mainData()$sd_reportability[match(audit$audit_msgid, mainData()$audit_msgid)]
-    
-    audit$sd_comment <- mainData()$sd_comment[match(audit$audit_msgid, mainData()$audit_msgid)]
-    
-    query <- "
-              UPDATE bccr_ss_audit_temp
-              SET 
-                  bccr_ss_audit_temp.ccs_dx_class = ?,
-                  bccr_ss_audit_temp.ccs_reportability = ?,
-                  bccr_ss_audit_temp.ccs_dx_class_comment = ?
-              WHERE 
-                  bccr_ss_audit_temp.audit_msgid = ?
-            "
-    
-    for (i in 1:nrow(audit)) {
-      dbExecute(con, query, params = list(audit$sd_dx_group[i], 
-                                          audit$sd_reportability[i], 
-                                          audit$sd_comment[i], 
-                                          audit$audit_msgid[i]))
+    for (i in 1:nrow(edited)) {
+      
+      auditIndex <- edited$audit_msgid[i]
+      reportability <- ifelse(edited$ccs_reportability == "Yes", 1, 0)
+      dx_group <- edited$ccs_dx_class[i]
+      dx_comment <- edited$ccs_dx_class_comment[i]
+      
+      auditIndex <- edited$audit_msgid[i]
+      
+      writeQuery <- paste0("UPDATE [eMaRCPlus_V90_Audit].[ dbo].[bccr_ss_audit_temp] SET ",
+                           "ccs_reportability = ", reportability, ", ",
+                           "ccs_dx_class = '", dx_group, "', ",
+                           "ccs_dx_class_comment = '", dx_comment,
+                           "' WHERE audit_msgid = ", auditIndex, ";")
     }
     
+    dbExecute(con, writeQuery)
+    
     })
-}
   
-   
+  observeEvent(input$submitChanges, {
+    showModal(
+      modalDialog(
+        title = "Success",
+        h4("Changes submitted to [bccr_ss_audit_temp]!")
+      )
+    )
+  })
+}
