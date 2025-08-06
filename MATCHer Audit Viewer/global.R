@@ -1,5 +1,6 @@
-# global
+# MATCHer Audit App Global ------------------------------------------------
 
+# Libraries
 library(tidyverse)
 library(scales)
 library(shinydashboard)
@@ -15,8 +16,11 @@ library(DBI)
 library(odbc)
 library(editData)
 
-dxGroups <- c("BR", "CR", "CX", "GI", "GU", "GY", "HN", "LK", "LU", "LY", "MM", "ME", "NE", "OO", "PR", "PU", "SA", "SK", "TH", "UNK", "<NA>")
+# DX Factors
+dxGroups <- c("BR", "CR", "CX", "GI", "GU", "GY", "HN", "LK", "LU", "LY", "MM", "ME", 
+              "NE", "OO", "PR", "PU", "SA", "SK", "TH", "UNK", "<NA>")
 
+# Other Factor
 filterChoices <- c("All", "All Full Matches", "All Mismatches", "Mismatched DX Groups", "Mismatched Reportability")
 
 # Server connection
@@ -26,9 +30,22 @@ con <- dbConnect(odbc::odbc(),
                  Database = "eMaRCPlus_V90_Audit",
                  Trusted_Connection = "Yes")
 
-query <- "SELECT audit_msgid, import_dt_time, tr_reportability, ds_reportability, tr_dxgroup, ds_dx_group, match_reportability_ds_tr, match_dxclass_ds_tr FROM [eMaRCPlus_V90_Audit].[dbo].[bccr_ss_audit_temp];"
+# Audit data query
+query <- "SELECT [audit_msgid],
+                 [prod_msgid],
+                 [import_dt_time], 
+                 [tr_reportability], 
+                 [ds_reportability],
+                 [tr_dxgroup],
+                 [ds_dx_group], 
+                 [match_reportability_ds_tr], 
+                 [match_dxclass_ds_tr],
+                 [ccs_reportability],
+                 [ccs_dx_class],
+                 [ccs_dx_class_comment]
+                 FROM [eMaRCPlus_V90_Audit].[dbo].[bccr_ss_audit_temp];"
 
-# Formatting
+# Baseline Dataset 
 audit <- dbGetQuery(con, query) %>%
   mutate(ds_dx_group = ifelse(is.na(ds_dx_group), "<NA>", ds_dx_group)) %>%
   mutate(ds_reportability = factor(ds_reportability, levels = c(0, 1), labels = c("No", "Yes")),
@@ -40,7 +57,13 @@ audit <- dbGetQuery(con, query) %>%
          ds_dx_group = factor(ds_dx_group, levels = dxGroups) 
   ) %>%
   mutate(import_dt_time = format(ymd(substring(import_dt_time, 1, 10)), "%Y-%m")) %>%
-  mutate(sd_reportability = factor("", levels = c("Yes", "No")),
-         sd_dx_group = factor("", levels = dxGroups) 
-  ) %>%
-  mutate(sd_comment = "")
+  mutate(ccs_reportability = factor("", levels = c("Yes", "No")),
+         ccs_dx_class = factor("", levels = dxGroups),
+         ccs_dx_class_comment = as.character(""),
+         ccs_edited = "No")
+
+# Backup Dataset
+# Updates everything CCS submits a change locally
+if (file.exists("insert backup file directory here")) {
+  backup <- readRDS("insert backup file directory here")
+}
