@@ -47,7 +47,7 @@ dxData <- dbGetQuery(pathCon, dxGroupQuery) %>%
   distinct(msgid, .keep_all = TRUE)
 
 # Pathology Message Query
-codes <- read.csv("H:/Data Integrity Analyst/Data Science/dashboard data/all dashboard files/examDescriptionCodes.csv")
+codes <- read.csv("examDescriptionCodes.csv")
 
 # Latest Pathology Date 
 maxDateQuery <- "SELECT MAX(msg_dt) AS max_date
@@ -171,6 +171,7 @@ message_text_output <- function(report_type, message_text_raw) {
 
 
   
+
 
 
 
